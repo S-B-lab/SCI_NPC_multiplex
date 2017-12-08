@@ -1,0 +1,30 @@
+---
+title: "Spinal Cord Injury & Neural Progenitor Cells"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+#1. INSTALLING PACKAGES
+#install.packages("ggplot2")
+#install.packages("data.table")
+#install.packages("RColorBrewer")
+
+#2. ATTACHING PACKAGES
+library(ggplot2)
+library(data.table)
+library(RColorBrewer)
+```
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+#1. IMPORTING DATA
+dir()
+```
+
+
+
+
+
