@@ -65,18 +65,45 @@ DT_summary <- DT_summary[,`:=`(SEMx1.96=qnorm(0.975)*norm_value_sd/sqrt(n))][, `
 ```
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
-#1. Comparing groups within time point 
-  #Evalute assumption -> parametric if both normality and homogenity holds, otherwise non-parametric test. print name of test conducted
-
 #1. Evaluating assumption of normal distribution
 norm_test_p <- do.call(rbind, lapply(split(DT_melt, DT_melt[,.(treatment, evaluation_weeks, variable)]), function(subset){subset[,p_value:=shapiro.test(subset[, norm_value])[2]]}))
 norm_test_p <- norm_test_p[, .(p_value= mean(p_value)), by=c("treatment", "evaluation_weeks", "variable")]
 #2. Evaluating assumption of homogenity of variances between treatments within time points
+homo_test_p <- do.call(rbind, lapply(split(DT_melt, DT_melt[, .(evaluation_weeks, variable)]), function(subset){subset[,p_value:=fligner.test(subset$norm_value, subset$treatment)[3]]}))
+homo_test_p <- homo_test_p[, .(p_value=mean(p_value)), by=c("evaluation_weeks", "variable")]
+#3. Independent two group comparison 
+setkey(homo_test_p, "evaluation_weeks", "variable")
+setkey(norm_test_p, "evaluation_weeks", "variable", "treatment")
 
-split()
 
+two_group_test <- function(list_object){
+  week = list_object[, evaluation_weeks][1]
+  target = list_object[, variable][1]
+  
+  norm_assump_1 = FALSE
+  norm_assump_2 = FALSE
+  homo_assump = FALSE
+  
+  if(homo_test_p[.(week, target), p_value]>0.05){
+    homo_assump = TRUE
+  }
+  
+  if(norm_test_p[.(week, target, "NPC"), p_value]>0.05){
+    norm_assump_1 = TRUE
+  }
+  
+  if(norm_test_p[.(week, target, "saline"), p_value]>0.05){
+    norm_assump_2 = TRUE
+  }
+  
+  return(norm_assump_2)
+}
 
+do.call(rbind, lapply(split(DT_melt, DT_melt[, .(variable, evaluation_weeks)]), function(subset){two_group_test(subset)}))
 
+#verify correct calculations
+#add selection of statistical test and output p_value
+#add to plot  
 
 ```
 
@@ -105,7 +132,7 @@ individual_target_plot <- function(target){
 
   return(out_plot)  
 }
-  
+
 individual_target_plot("IL-1a")
 
 
