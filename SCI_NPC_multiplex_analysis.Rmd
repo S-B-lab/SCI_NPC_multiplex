@@ -12,16 +12,106 @@ knitr::opts_chunk$set(echo = TRUE)
 #install.packages("ggplot2")
 #install.packages("data.table")
 #install.packages("RColorBrewer")
+#install.packages("cowplot")
 
 #2. ATTACHING PACKAGES
 library(ggplot2)
 library(data.table)
 library(RColorBrewer)
+library(cowplot)
 ```
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
 #1. IMPORTING DATA
-dir()
+DT = fread("SCI_NPC_saline_overtime_data.csv")
+
+#2. CLEANING COLUMN NAMES
+column_name_adjuster <- function(column_name_raw){
+    column_name_adjusted <- substr(column_name_raw, 4, nchar(column_name_raw))
+    column_name_adjusted <- substr(column_name_adjusted, 0, nchar(column_name_adjusted)-5)
+    return(column_name_adjusted)
+}
+
+col_name_subset <- names(DT[,!c("SCI", "treatment", "evaluation", "evaluation_weeks")])   
+col_name_subset <- unlist(lapply(col_name_subset, function(col_name){column_name_adjuster(col_name)}))
+names(DT) <-  c("SCI", "treatment", "evaluation", "evaluation_weeks", col_name_subset)
+
+#3. REMOVING UNNECESSARY DATA
+DT <-  DT[!is.na(evaluation_weeks)]
+DT[, "evaluation"] = NULL
+
+#4. LONG FORMAT
+DT_melt <- melt.data.table(DT, id.vars=c("SCI", "treatment", "evaluation_weeks"))
+
+#5. NORMALIZE TO HEALTHY FOR EACH TARGET SEPARATELY
+expression_normalizer <-  function(list_object){
+  divisor <-  list_object[treatment=="none", mean(value)]
+  list_object[, norm_value:=value/divisor]
+  return(list_object)
+}
+
+DT_melt <- do.call(rbind, lapply(split(DT_melt, DT_melt[,variable]), function(object){expression_normalizer(object)}))
+
+#6. REMOVING UNNECESSARY DATA & ADJUSTING VARIABLE TYPES
+DT_melt[, "SCI"] = NULL
+DT_melt <- DT_melt[treatment!="none"]
+DT_melt[, "treatment"] <- factor(DT_melt[, treatment])
+```
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+#1. Summarizing data per treatment, time point and target
+DT_summary <- DT_melt[, .(norm_value = mean(norm_value), norm_value_sd = sd(norm_value), n=.N), by=c("treatment", "evaluation_weeks", "variable")]
+DT_summary <- DT_summary[,`:=`(SEMx1.96=qnorm(0.975)*norm_value_sd/sqrt(n))][, `:=`(CI.lower = norm_value-SEMx1.96, CI.upper=norm_value+SEMx1.96)]
+```
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+#1. Comparing groups within time point 
+  #Evalute assumption -> parametric if both normality and homogenity holds, otherwise non-parametric test. print name of test conducted
+
+#1. Evaluating assumption of normal distribution
+norm_test_p <- do.call(rbind, lapply(split(DT_melt, DT_melt[,.(treatment, evaluation_weeks, variable)]), function(subset){subset[,p_value:=shapiro.test(subset[, norm_value])[2]]}))
+norm_test_p <- norm_test_p[, .(p_value= mean(p_value)), by=c("treatment", "evaluation_weeks", "variable")]
+#2. Evaluating assumption of homogenity of variances between treatments within time points
+
+split()
+
+
+
+
+```
+
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+#Plotting individual targets
+individual_target_plot <- function(target){
+  plot_data <- DT_melt[variable==target]
+  plot_data_summary <-  DT_summary[variable==target]
+  
+  out_plot <- ggplot(plot_data_summary, aes(x=evaluation_weeks, y=norm_value, color=treatment))+
+    #Main
+    geom_errorbar(aes(ymin=CI.lower, ymax=CI.upper), size=3, width=1, position = position_dodge(width = 1), alpha=0.8, show.legend = FALSE)+
+    geom_jitter(plot_data, mapping=aes(x=evaluation_weeks, y=norm_value, color=treatment), size=5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 1), alpha=0.7)+
+    geom_point(shape = 15, size=8, position = position_dodge(width=1), show.legend = FALSE)+
+    #Labels
+    xlab("Weeks (Post SCI)")+
+    ylab("Normalised expression")+
+    scale_x_continuous(breaks=seq(0,12,1))+
+    scale_y_continuous(breaks=seq(0,20,2))+
+    theme(axis.title = element_text(size=20, face="bold"), legend.position = "bottom", legend.justification = "center", legend.text = element_text(size=18), legend.title = element_text(size=18), axis.text = element_text(size=16))+
+    #Colors
+    scale_color_manual(values=brewer.pal(3, "Set1"), name="Treatment:", labels=c("SCI+NPC", "SCI+Saline"))+
+    #Annotations
+    annotate(geom="text", label=target, x=6.5, y=10, size=14, fontface=2, alpha=0.8)
+
+  return(out_plot)  
+}
+  
+individual_target_plot("IL-1a")
+
+
+
+
+
 ```
 
 
