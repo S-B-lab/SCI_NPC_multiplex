@@ -1,5 +1,5 @@
 ---
-title: "Spinal Cord Injury & Neural Progenitor Cells"
+title: "Neural Progenitor Cells for Treatment of Spinal Cord Injury"
 output: html_document
 ---
 
@@ -19,6 +19,7 @@ library(ggplot2)
 library(data.table)
 library(RColorBrewer)
 library(cowplot)
+library(knitr)
 ```
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
@@ -65,6 +66,10 @@ DT_summary <- DT_summary[,`:=`(SEMx1.96=qnorm(0.975)*norm_value_sd/sqrt(n))][, `
 ```
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+################################################################### STATISTICAL ANALYSIS ##############################################################
+```
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
 #1. Evaluating assumption of normal distribution
 norm_test_p <- do.call(rbind, lapply(split(DT_melt, DT_melt[,.(treatment, evaluation_weeks, variable)]), function(subset){subset[,p_value:=shapiro.test(subset[, norm_value])[2]]}))
 norm_test_p <- norm_test_p[, .(p_value= mean(p_value)), by=c("treatment", "evaluation_weeks", "variable")]
@@ -75,7 +80,6 @@ homo_test_p <- homo_test_p[, .(p_value=mean(p_value)), by=c("evaluation_weeks", 
 setkey(homo_test_p, "evaluation_weeks", "variable")
 setkey(norm_test_p, "evaluation_weeks", "variable", "treatment")
 
-
 two_group_test <- function(list_object){
   week = list_object[, evaluation_weeks][1]
   target = list_object[, variable][1]
@@ -83,7 +87,7 @@ two_group_test <- function(list_object){
   norm_assump_1 = FALSE
   norm_assump_2 = FALSE
   homo_assump = FALSE
-  
+  #Checking for fulfillment of assumptions
   if(homo_test_p[.(week, target), p_value]>0.05){
     homo_assump = TRUE
   }
@@ -96,23 +100,29 @@ two_group_test <- function(list_object){
     norm_assump_2 = TRUE
   }
   
-  return(norm_assump_2)
+  if(isTRUE(norm_assump_1) & isTRUE(norm_assump_2)){
+    if(isTRUE(homo_assump)){
+      p_value_out <- t.test(list_object[treatment=="saline", norm_value], list_object[treatment=="NPC", norm_value], var.equal = TRUE)$p.value 
+      return(data.table(evaluation_week=week, variable=target, p_value=p_value_out, test="t.test_equal_var"))
+    } else {
+      p_value_out <- t.test(list_object[treatment=="saline", norm_value], list_object[treatment=="NPC", norm_value], var.equal = FALSE)$p.value 
+      return(data.table(evaluation_week=week, variable=target, p_value=p_value_out, test="t.test_unequal_var"))
+    }
+  } else {
+    p_value_out <- wilcox.test(list_object[treatment=="saline", norm_value], list_object[treatment=="NPC", norm_value])$p.value 
+    return(data.table(evaluation_week=week, variable=target, p_value = p_value_out, test="wilcox_test"))
+  }
 }
 
-do.call(rbind, lapply(split(DT_melt, DT_melt[, .(variable, evaluation_weeks)]), function(subset){two_group_test(subset)}))
-
-#verify correct calculations
-#add selection of statistical test and output p_value
-#add to plot  
-
+group_comparison_p <- do.call(rbind, lapply(split(DT_melt, DT_melt[, .(variable, evaluation_weeks)]), function(subset){two_group_test(subset)}))
 ```
-
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
 #Plotting individual targets
 individual_target_plot <- function(target){
   plot_data <- DT_melt[variable==target]
   plot_data_summary <-  DT_summary[variable==target]
+  p_value_data <-  group_comparison_p[variable==target]
   
   out_plot <- ggplot(plot_data_summary, aes(x=evaluation_weeks, y=norm_value, color=treatment))+
     #Main
@@ -123,25 +133,49 @@ individual_target_plot <- function(target){
     xlab("Weeks (Post SCI)")+
     ylab("Normalised expression")+
     scale_x_continuous(breaks=seq(0,12,1))+
-    scale_y_continuous(breaks=seq(0,20,2))+
-    theme(axis.title = element_text(size=20, face="bold"), legend.position = "bottom", legend.justification = "center", legend.text = element_text(size=18), legend.title = element_text(size=18), axis.text = element_text(size=16))+
+    scale_y_continuous(breaks=seq(0,20,2), limits = c(-5, 20))+
+    theme(axis.title = element_text(size=20, face="bold"), legend.position = "bottom", legend.justification = "center", legend.text = element_text(size=18), legend.title = element_text(size=18), axis.text = element_text(size=16), axis.line.y = element_blank())+
     #Colors
     scale_color_manual(values=brewer.pal(3, "Set1"), name="Treatment:", labels=c("SCI+NPC", "SCI+Saline"))+
     #Annotations
-    annotate(geom="text", label=target, x=6.5, y=10, size=14, fontface=2, alpha=0.8)
-
+    annotate(geom="text", label=target, x=6.5, y=7.5, size=14, fontface=2, alpha=0.8)+
+    annotate(geom="text",label=paste("p:", toString(format(p_value_data[, p_value][1], digits=2, nsmall = 2)), sep = ""), x=2, y=-4, fontface=4, size=5)+
+    annotate(geom="text",label=paste("p:", toString(format(p_value_data[, p_value][2], digits=2, nsmall = 2)), sep = ""), x=5, y=-4, fontface=4, size=5)+
+    annotate(geom="text",label=paste("p:", toString(format(p_value_data[, p_value][3], digits=2, nsmall = 2)), sep = ""), x=12, y=-4, fontface=4, size=5)
+  
   return(out_plot)  
 }
-
-individual_target_plot("IL-1a")
-
-
-
-
-
 ```
 
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+################################################################### OUTPUT ##############################################################
+```
+##Statistical analysis: between groups for each time point
 
+###Evaluation of assumptions
+Assumption of normality is evaluated using Shapiro Wilk's test for each treatment (group) within each time point and for each target separately. Null hypothesis is that data is normally distributed. 
 
+Assumption of homogenity of variances is between the two treatments (groups) within each time point and for each target. Given that both groups followed a normal distribution the homogenity of variances was evaluated using Bartlett's test. Given that at least one of the groups did not follow a normal distribution the homogenity of variances was evaluated using Fligner Killeen's test.  
 
+###Independent two group comparison
+Given that data in both treatments (groups) was normally distributed and the variances were equal the groups were compared using two-sided non-paired Student's t-test. Given that data in both treatments (groups) was normally distributed but the groups and unequal variances the variance was estimated separately for eah group and the Welch modification to the degrees of freedom was used. 
 
+Given that data in at least one of the groups was not normally distributed a two-sided non-paired Wilcoxon Rank Sum test with continuity correction in the normal approximation for the p-value was calculated. 
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+p_table <- group_comparison_p
+p_table[, "p_value"] <- p_table[, format(p_value, digits = 2)]
+p_table[, "test"] = NULL
+p_table <- dcast.data.table(p_table, ...~evaluation_week, value.var = "p_value")
+
+kable(p_table, align="c", col.names = c("Target", "P-value(2w)", "P-value(5w)", "P-value(12w)"))
+```
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE, fig.width=20, fig.height=10}
+plot_grid(individual_target_plot("IL-1a"), individual_target_plot("IL-1b"), individual_target_plot("IL-2"), individual_target_plot("IL-4"))
+plot_grid(individual_target_plot("IL-6"), individual_target_plot("IL-7"), individual_target_plot("IL-10"), individual_target_plot("IL-12(p70)"))
+plot_grid(individual_target_plot("IL-13"), individual_target_plot("IL-17"), individual_target_plot("IL-18"), individual_target_plot("G-CSF"))
+plot_grid(individual_target_plot("GM-CSF"), individual_target_plot("GRO/KC"), individual_target_plot("IFN-g"), individual_target_plot("M-CSF"))
+plot_grid(individual_target_plot("MCP-1"), individual_target_plot("MIP-1a"), individual_target_plot("MIP-3a"), individual_target_plot("RANTES"))
+plot_grid(individual_target_plot("TNFa"), individual_target_plot("VEGF"))
+```
