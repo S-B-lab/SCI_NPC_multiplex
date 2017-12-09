@@ -13,6 +13,7 @@ knitr::opts_chunk$set(echo = TRUE)
 #install.packages("data.table")
 #install.packages("RColorBrewer")
 #install.packages("cowplot")
+#install.packages("gridExtra")
 
 #2. ATTACHING PACKAGES
 library(ggplot2)
@@ -20,6 +21,9 @@ library(data.table)
 library(RColorBrewer)
 library(cowplot)
 library(knitr)
+library(gridExtra)
+library(grid)
+
 ```
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
@@ -66,7 +70,7 @@ DT_melt[, "treatment"] <- factor(DT_melt[, treatment])
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
 #1. REMOVING OUTLIERS
 #Range based on histogram of norm_values. IL-7 removed due to multiple outliers. 
-DT_melt <- DT_melt[norm_value<20 & variable!="IL-7"]
+DT_melt <- DT_melt[norm_value<20 & norm_value>-10 & variable!="IL-7"]
 DT_melt[,"variable"] <- factor(DT_melt[,variable])
 
 #2. Summarizing data per treatment, time point and target
@@ -102,7 +106,7 @@ homo_test_p <- homo_test_p[, .(p_value=mean(p_value)), by=c("evaluation_weeks", 
 setkey(homo_test_p, "evaluation_weeks", "variable")
 setkey(norm_test_p, "evaluation_weeks", "variable", "treatment")
 
-two_group_test <- function(list_object){
+two_group_test <- function(list_object, norm_values, homo_values){
   week = list_object[, evaluation_weeks][1]
   target = list_object[, variable][1]
   
@@ -110,15 +114,15 @@ two_group_test <- function(list_object){
   norm_assump_2 = FALSE
   homo_assump = FALSE
   #Checking for fulfillment of assumptions
-  if(homo_test_p[.(week, target), p_value]>0.05){
+  if(homo_values[.(week, target), p_value]>0.05){
     homo_assump = TRUE
   }
   
-  if(norm_test_p[.(week, target, "NPC"), p_value]>0.05){
+  if(norm_values[.(week, target, "NPC"), p_value]>0.05){
     norm_assump_1 = TRUE
   }
   
-  if(norm_test_p[.(week, target, "saline"), p_value]>0.05){
+  if(norm_values[.(week, target, "saline"), p_value]>0.05){
     norm_assump_2 = TRUE
   }
   
@@ -136,9 +140,10 @@ two_group_test <- function(list_object){
   }
 }
 
-group_comparison_p <- do.call(rbind, lapply(split(DT_melt, DT_melt[, .(variable, evaluation_weeks)]), function(subset){two_group_test(subset)}))
+group_comparison_p <- do.call(rbind, lapply(split(DT_melt, DT_melt[, .(variable, evaluation_weeks)]), function(subset){two_group_test(subset, norm_test_p, homo_test_p)}))
 
 ```
+
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
 #Plotting individual targets
@@ -155,49 +160,181 @@ individual_target_plot <- function(target){
     geom_point(shape = 15, size=8, position = position_dodge(width=1), show.legend = FALSE)+
     #Labels
     xlab("Weeks (Post SCI)")+
-    ylab("Expression in relation to mean of healthy control")+
+    ylab("Normalised expression")+
     scale_x_continuous(breaks=seq(0,12,1))+
-    scale_y_continuous(breaks=seq(-10,20,2), limits = c(-10, 20))+
-    theme(axis.title = element_text(size=16, face="bold"), legend.position = "bottom", legend.justification = "center", legend.text = element_text(size=18), legend.title = element_blank(), axis.text = element_text(size=16), axis.line.y = element_blank())+
+    scale_y_continuous(breaks=seq(-16,20,2), limits = c(-15, 20))+
+    theme(axis.title = element_text(size=20, face="bold"), legend.position = "bottom", legend.justification = "center", legend.text = element_text(size=18), legend.title = element_blank(), axis.text = element_text(size=16), axis.line.y = element_blank())+
     #Colors
     scale_color_manual(values=brewer.pal(3, "Set1"), name="Treatment:", labels=c("SCI+NPC", "SCI+Saline"))+
     #Annotations
-    annotate(geom="text", label=target, x=6.5, y=7.5, size=14, fontface=2, alpha=0.8)+
-    annotate(geom="text",label=paste("", toString(format(p_value_data[, p_value][1], digits=2, nsmall = 2)), sep = ""), x=2, y=18, fontface=2, size=5)+
-    annotate(geom="text",label=paste("", toString(format(p_value_data[, p_value][2], digits=2, nsmall = 2)), sep = ""), x=5, y=18, fontface=2, size=5)+
-    annotate(geom="text",label=paste("", toString(format(p_value_data[, p_value][3], digits=2, nsmall = 2)), sep = ""), x=12, y=18, fontface=2, size=5)+
+    annotate(geom="text", label=target, x=6.5, y=7.5, size=12, fontface=2, alpha=0.8)+
+    annotate(geom="text",label=paste("", toString(format(p_value_data[, p_value][1], digits=2, nsmall = 2)), sep = ""), x=2, y=19, fontface=2, size=5)+
+    annotate(geom="text",label=paste("", toString(format(p_value_data[, p_value][2], digits=2, nsmall = 2)), sep = ""), x=5, y=19, fontface=2, size=5)+
+    annotate(geom="text",label=paste("", toString(format(p_value_data[, p_value][3], digits=2, nsmall = 2)), sep = ""), x=12, y=19, fontface=2, size=5)+
     
     annotate(geom="text", label="UP-REGULATION", x=6.5, y=16, fontface=2, alpha=0.3, size=6)+
-    annotate(geom="text", label="DOWN-REGULATION", x=6.5, y=-7, fontface=2, alpha=0.3, size=6)
+    annotate(geom="text", label="DOWN-REGULATION", x=6.5, y=-14, fontface=2, alpha=0.3, size=6)
   
   return(out_plot)  
 }
 
-individual_target_plot("IL-1a")
+```
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+#1. DEFINING INFLAMMATION TYPE FOR TARGETS
+pro_inflammation <- data.table(variable=c("IL-1a", "IL-1b", "IL-5", "IL-6", "IL-12(p70)", "IL-17", "IL-18", "GM-CSF", "GRO/KC", "IFN-g", "MCP-1", "MIP-1a", "MIP-3a", "RANTES", "TNF-a"), inflammation_type="pro")
+anti_inflammation <- data.table(variable=c("IL-4", "Il-10", "IL-13", "IL-2"), inflammation_type="anti")
+variable_type <- rbind(pro_inflammation, anti_inflammation)
+#2. MERGING RAW DATA SET WITH INFLAMMATION TYPE
+DT_melt_inflammation <- merge(DT_melt, variable_type, by = "variable")
+setkey(DT_melt_inflammation, inflammation_type)
+#3. SUMMARIZING DATA FOR PLOTTING
+DT_melt_inflammation_summary <- DT_melt_inflammation[, .(norm_value=mean(norm_value), norm_value_sd=sd(norm_value), n=.N), by=c("treatment", "evaluation_weeks", "inflammation_type")][,`:=`(SEMx1.96=qnorm(0.975)*norm_value_sd/sqrt(n))][,`:=`(CI.lower=norm_value-SEMx1.96, CI.upper=norm_value+SEMx1.96)]
+setkey(DT_melt_inflammation_summary, inflammation_type, evaluation_weeks)
+#STATISTICAL ANALYSIS
+inflammation_intraday_p_value <- function(list_object, infl_type, counter){
+  calc_data <- list_object[.(infl_type)]
+  #Bootstrapping data
+  calc_data <- do.call(rbind,lapply(split(calc_data, calc_data[, treatment]), function(subset){subset[sample(.N, nrow(subset), replace=TRUE)]}))
+  #Evaluating assumptions
+  norm_p_value <- do.call(rbind, lapply(split(calc_data, calc_data[, .(treatment)]), function(subset){data.table(treatment=subset$treatment, p_value=shapiro.test(subset$norm_value)$p.value)}))
+  norm_p_value <- norm_p_value[, .(p_value=mean(p_value)), by="treatment"]
+  
+  homo_p_value <-  fligner.test(calc_data[,norm_value], calc_data[,treatment])$p.value
+
+  if(isTRUE(norm_p_value[treatment=="NPC", p_value]>0.05)&isTRUE(norm_p_value[treatment=="saline", p_value]>0.05)){
+    if(homo_p_value>0.05){
+      p_value <- t.test(calc_data[treatment=="NPC", norm_value], calc_data[treatment=="saline", norm_value], var.equal = TRUE)$p.value
+    } else {
+      p_value <- t.test(calc_data[treatment=="NPC", norm_value], calc_data[treatment=="saline", norm_value], var.equal = FALSE)$p.value
+    }
+  } else {
+    p_value <- wilcox.test(calc_data[treatment=="NPC", norm_value],calc_data[treatment=="saline", norm_value])$p.value
+  }
+  return(data.table(evaluation_weeks = calc_data[, evaluation_weeks][1], p_value = p_value))
+}
+
+inflammation_boot_p_values <- do.call(rbind, lapply(1:1000, function(nothing){do.call(rbind, lapply(split(DT_melt_inflammation, DT_melt_inflammation[,.(evaluation_weeks)]), function(subset){inflammation_intraday_p_value(subset, "pro", 1)}))}))
+
+```
+
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+#4. INFLAMMATION OVER TIME PLOT FUNCTION
+inflammation_overtime_plot <- function(infl_type){
+  plot_data <- DT_melt_inflammation[.(infl_type)]
+  plot_data_summary <- DT_melt_inflammation_summary[.(infl_type)]
+  
+  plot_out <- ggplot(plot_data_summary, aes(x=evaluation_weeks, y=norm_value, color=treatment))+
+    geom_segment(aes(x=1, xend=12, y=0, yend=0), color="black", size=1, linetype=2)+
+    geom_jitter(plot_data, mapping=aes(x=evaluation_weeks, y=norm_value, color=treatment), size=2, position = position_jitterdodge(jitter.width = 2, dodge.width = 2), alpha=0.7)+
+    geom_errorbar(aes(ymin=CI.lower, ymax=CI.upper), position = position_dodge(width=2), size=3, width=1, show.legend = FALSE, alpha=0.8)+
+    geom_smooth(plot_data, mapping=aes(x=evaluation_weeks, y=norm_value, color=treatment, fill=treatment), se=TRUE, alpha=0.2, show.legend = FALSE)+
+    #Legends and shapes    
+    xlab("Weeks (Post SCI)")+
+    ylab("Normalised expression")+
+    scale_x_continuous(breaks=seq(0,12,1))+
+    scale_y_continuous(breaks=seq(-16,20,2), limits = c(-15, 20))+
+    theme(axis.title = element_text(size=20, face="bold"), legend.position = "bottom", legend.justification = "center", legend.text = element_text(size=18), legend.title = element_blank(), axis.text = element_text(size=16), axis.line.y = element_blank())+
+    #Colors
+    scale_color_manual(values=brewer.pal(3, "Set1"), name="Treatment:", labels=c("SCI+NPC", "SCI+Saline"))+
+    scale_fill_manual(values=brewer.pal(3, "Set1"), name="Treatment:", labels=c("SCI+NPC", "SCI+Saline"))+
+    #Annotations
+    annotate(geom="text", label="UP-REGULATION", x=6.5, y=16, fontface=2, alpha=0.3, size=6)+
+    annotate(geom="text", label="DOWN-REGULATION", x=6.5, y=-14, fontface=2, alpha=0.3, size=6)+
+    
+    annotate(geom="text", label=toString(format(inflammation_boot_p_values[evaluation_weeks==2, mean(p_value)],digits=2, scientific = TRUE)), x=2, y=19, fontface=2, size=5)+
+    annotate(geom="text", label=toString(format(inflammation_boot_p_values[evaluation_weeks==5, mean(p_value)],digits=2, scientific = TRUE)), x=5, y=19, fontface=2, size=5)+
+    annotate(geom="text", label=toString(format(inflammation_boot_p_values[evaluation_weeks==12, mean(p_value)],digits=2, scientific = TRUE)), x=12, y=19, fontface=2, size=5)
+
+  return(plot_out)
+}
 
 ```
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+#HISTOGRAM OF BOOSTRAPPED P-VALUES FOR INDEPENDENT TWO GROUP COMPARISON
+setkey(inflammation_boot_p_values, evaluation_weeks)
+
+inflammation_boot_p_value_histo <- function(week){
+  plot_data <- inflammation_boot_p_values[.(week)]
+  plot_palette <- brewer.pal(9, "Blues")
+  if(week==2){x_lower =-0.00001 ; x_upper=0.0005 ; plot_color=plot_palette[7]}
+  if(week==5){x_lower=-0.001 ; x_upper=0.05 ; plot_color=plot_palette[8]}
+  if(week==12){x_lower=-0.01 ; x_upper=1 ; plot_color=plot_palette[9]}
+  
+  plot_out <- ggplot(plot_data, aes(x=p_value))+
+    geom_histogram(position="identity", fill=plot_color, alpha=0.9, bins=100)+
+    xlim(x_lower, x_upper)+
+    ylim(0,700)+
+    theme(axis.title = element_blank(), axis.line.y = element_blank())+
+    annotate(geom="text", label=paste(toString(week), "w"), x=x_upper/2, y=400, size=15)
+  
+  return(plot_out)
+}
+
+```
+
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
 ################################################################### OUTPUT ##############################################################
 ```
+## Executive summary
+
+*
+
+*
+
+
 ## Data modifications
 
-* *Normalisation:* Each expression value (i.e. for each day, animal and target) is divided (i.e. normalised) by the mean of the expression for the same target in healthy (none injured, none transplanted) animals.  
+* **Normalisation:** Each expression value (i.e. for each day, animal and target) is divided (i.e. normalised) by the mean of the expression for the same target in healthy (none injured, none transplanted) animals.  
 
-* *Outliers:* All observations wiht normalised expression value > 20 are removed. This cut-off is based in plotting of histogram. IL-7 is completely removed due to heavy influence of outliers. 
+* **Outliers:** All observations wiht normalised expression value > 20 are removed. This cut-off is based in plotting of histogram. IL-7 is completely removed due to heavy influence of outliers. 
+
+***
 
 ## Statistical analysis
 
-###Evaluation of assumptions prior to statistical analysis
-* Assumption of normality is evaluated using Shapiro Wilk's test for each treatment (group) within each time point and for each target separately. Null hypothesis is that data is normally distributed. 
+###Evaluation of assumptions
+* **Assumption of normality** is evaluated using Shapiro Wilk's test for each treatment (group) within each time point and for each target separately. Null hypothesis is that data is normally distributed. 
 
-* Assumption of homogenity of variances is between the two treatments (groups) within each time point and for each target. Given that both groups followed a normal distribution the homogenity of variances was evaluated using Bartlett's test. Given that at least one of the groups did not follow a normal distribution the homogenity of variances was evaluated using Fligner Killeen's test.  
+* **Assumption of homogenity** of variances is between the two treatments (groups) within each time point and for each target. Given that both groups followed a normal distribution the homogenity of variances was evaluated using Bartlett's test. Given that at least one of the groups did not follow a normal distribution the homogenity of variances was evaluated using Fligner Killeen's test.  
 
 ###Independent intraday two group comparison
 * Given that data in both treatments (groups) was normally distributed and the variances were equal the groups were compared using two-sided non-paired Student's t-test. Given that data in both treatments (groups) was normally distributed but the groups and unequal variances the variance was estimated separately for eah group and the Welch modification to the degrees of freedom was used. 
 
 * Given that data in at least one of the groups was not normally distributed a two-sided non-paired Wilcoxon Rank Sum test with continuity correction in the normal approximation for the p-value was calculated. 
 
+***
+### Open source access
+The R-script and html-report can both be accessed at [github](https://github.com/S-B-lab/SCI_NPC_multiplex). Please feel free to fork or make a pull request. 
+
+***
+## Pro-inflammation over time
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE, fig.width=14, fig.height=7}
+inflammation_overtime_plot("pro")
+
+```
+
+**Figure 1:** Figure reports pro-inflammation (IL-1a, IL-1b, IL-5, IL-6, IL-12(p70), IL-17, IL-18, GM-CSF, GRO/KC, IFN-g, MCP-1, MIP-1a, MIP-3a, RANTES, TNF-a) over time for each treatment group. P-values are average p-values of 1000 bootstrapped replicates of independent two group comparison using assumptions and test selection as described above.    
+
+## Sensitivity analysis of pro-inflammation over time
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE, fig.width=14, fig.height=7}
+grid.arrange(inflammation_boot_p_value_histo(2), inflammation_boot_p_value_histo(5), inflammation_boot_p_value_histo(12), ncol=3, bottom=textGrob("P-value", gp=gpar(fontsize=17, fontface="bold")), left=textGrob("Count (n)", gp=gpar(fontsize=17, fontface="bold"), rot=90))
+
+```
+
+**Figure 2: ** Figure reports histograms of 1000 p-values calculated on bootstrapped data for pro-inflammation from each group at each time point. 
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE, fig.width=14, fig.height=7}
+kable(format(dcast.data.table(inflammation_boot_p_values[, .(median_p_value=median(p_value)), by="evaluation_weeks"], ...~evaluation_weeks, value.var="median_p_value")[, 2:4], digits=2, scientific = TRUE), align="c", col.names=c("2w", "5w", "12w"))
+```
+
+**Table 1:** Median p-values for 1000 p-values for independent two group comparison based on bootstrapped data for pro-inflammatory data. 
+
+***
+## Individual cytokines over time
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE, fig.width=20, fig.height=10}
 #INDIVIDUAL CYTOKINES
@@ -206,9 +343,11 @@ plot_grid(individual_target_plot("IL-6"), individual_target_plot("IL-10"), indiv
 plot_grid(individual_target_plot("IL-13"), individual_target_plot("IL-17"), individual_target_plot("IL-18"), individual_target_plot("G-CSF"))
 plot_grid(individual_target_plot("GM-CSF"), individual_target_plot("GRO/KC"), individual_target_plot("IFN-g"), individual_target_plot("M-CSF"))
 plot_grid(individual_target_plot("MCP-1"), individual_target_plot("MIP-1a"), individual_target_plot("MIP-3a"), individual_target_plot("RANTES"))
-plot_grid(individual_target_plot("VEGF"))
+plot_grid(individual_target_plot("VEGF"), ncol=2, nrow=2)
 
 ```
+
+**Figure 3:** Each plot reports expression of one cytokine per treatment group and time point. Statistical analysis as described above. 
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
 #P-VALUES FOR INTRADAY COMPARISONS
