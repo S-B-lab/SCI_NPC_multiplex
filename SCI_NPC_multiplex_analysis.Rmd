@@ -60,22 +60,44 @@ DT_melt[, "treatment"] <- factor(DT_melt[, treatment])
 ```
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
-#1. Summarizing data per treatment, time point and target
-DT_summary <- DT_melt[, .(norm_value = mean(norm_value), norm_value_sd = sd(norm_value), n=.N), by=c("treatment", "evaluation_weeks", "variable")]
-DT_summary <- DT_summary[,`:=`(SEMx1.96=qnorm(0.975)*norm_value_sd/sqrt(n))][, `:=`(CI.lower = norm_value-SEMx1.96, CI.upper=norm_value+SEMx1.96)]
-```
-
-```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
 ################################################################### STATISTICAL ANALYSIS ##############################################################
 ```
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+#1. REMOVING OUTLIERS
+#Range based on histogram of norm_values. IL-7 removed due to multiple outliers. 
+DT_melt <- DT_melt[norm_value<20 & variable!="IL-7"]
+DT_melt[,"variable"] <- factor(DT_melt[,variable])
+
+#2. Summarizing data per treatment, time point and target
+DT_summary <- DT_melt[, .(norm_value = mean(norm_value), norm_value_sd = sd(norm_value), n=.N), by=c("treatment", "evaluation_weeks", "variable")]
+DT_summary <- DT_summary[,`:=`(SEMx1.96=qnorm(0.975)*norm_value_sd/sqrt(n))][, `:=`(CI.lower = norm_value-SEMx1.96, CI.upper=norm_value+SEMx1.96)]
+
+```
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
 #1. Evaluating assumption of normal distribution
-norm_test_p <- do.call(rbind, lapply(split(DT_melt, DT_melt[,.(treatment, evaluation_weeks, variable)]), function(subset){subset[,p_value:=shapiro.test(subset[, norm_value])[2]]}))
+norm_function <- function(list_object){
+  if(nrow(list_object)<3){
+    return(list_object[,p_value:=0])
+  } else {
+    return(list_object[,p_value:=shapiro.test(list_object[, norm_value])[2]])
+  }
+}
+norm_test_p <- do.call(rbind, lapply(split(DT_melt, DT_melt[, .(treatment, evaluation_weeks, variable)]), function(subset){norm_function(subset)}))
 norm_test_p <- norm_test_p[, .(p_value= mean(p_value)), by=c("treatment", "evaluation_weeks", "variable")]
+
 #2. Evaluating assumption of homogenity of variances between treatments within time points
-homo_test_p <- do.call(rbind, lapply(split(DT_melt, DT_melt[, .(evaluation_weeks, variable)]), function(subset){subset[,p_value:=fligner.test(subset$norm_value, subset$treatment)[3]]}))
+homo_function <- function(list_object){
+  if(nrow(list_object)<3){
+    return(list_object[,p_value:=0])
+  } else {
+    return(list_object[,p_value:=fligner.test(list_object$norm_value, list_object$treatment)[3]])
+  }
+}
+homo_test_p <- do.call(rbind, lapply(split(DT_melt, DT_melt[, .(evaluation_weeks, variable)]), function(subset){homo_function(subset)}))
 homo_test_p <- homo_test_p[, .(p_value=mean(p_value)), by=c("evaluation_weeks", "variable")]
+
 #3. Independent two group comparison 
 setkey(homo_test_p, "evaluation_weeks", "variable")
 setkey(norm_test_p, "evaluation_weeks", "variable", "treatment")
@@ -102,19 +124,20 @@ two_group_test <- function(list_object){
   
   if(isTRUE(norm_assump_1) & isTRUE(norm_assump_2)){
     if(isTRUE(homo_assump)){
-      p_value_out <- t.test(list_object[treatment=="saline", norm_value], list_object[treatment=="NPC", norm_value], var.equal = TRUE)$p.value 
+      p_value_out <- t.test(list_object[treatment=="saline", norm_value], list_object[treatment=="NPC", norm_value], var.equal = TRUE)$p.value
       return(data.table(evaluation_week=week, variable=target, p_value=p_value_out, test="t.test_equal_var"))
     } else {
-      p_value_out <- t.test(list_object[treatment=="saline", norm_value], list_object[treatment=="NPC", norm_value], var.equal = FALSE)$p.value 
+      p_value_out <- t.test(list_object[treatment=="saline", norm_value], list_object[treatment=="NPC", norm_value], var.equal = FALSE)$p.value
       return(data.table(evaluation_week=week, variable=target, p_value=p_value_out, test="t.test_unequal_var"))
     }
   } else {
-    p_value_out <- wilcox.test(list_object[treatment=="saline", norm_value], list_object[treatment=="NPC", norm_value])$p.value 
+    p_value_out <- wilcox.test(list_object[treatment=="saline", norm_value], list_object[treatment=="NPC", norm_value])$p.value
     return(data.table(evaluation_week=week, variable=target, p_value = p_value_out, test="wilcox_test"))
   }
 }
 
 group_comparison_p <- do.call(rbind, lapply(split(DT_melt, DT_melt[, .(variable, evaluation_weeks)]), function(subset){two_group_test(subset)}))
+
 ```
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
@@ -126,43 +149,69 @@ individual_target_plot <- function(target){
   
   out_plot <- ggplot(plot_data_summary, aes(x=evaluation_weeks, y=norm_value, color=treatment))+
     #Main
+    geom_segment(aes(x=1, xend=12, y=0, yend=0), color="black", size=1, linetype=2)+
     geom_errorbar(aes(ymin=CI.lower, ymax=CI.upper), size=3, width=1, position = position_dodge(width = 1), alpha=0.8, show.legend = FALSE)+
     geom_jitter(plot_data, mapping=aes(x=evaluation_weeks, y=norm_value, color=treatment), size=5, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 1), alpha=0.7)+
     geom_point(shape = 15, size=8, position = position_dodge(width=1), show.legend = FALSE)+
     #Labels
     xlab("Weeks (Post SCI)")+
-    ylab("Normalised expression")+
+    ylab("Expression in relation to mean of healthy control")+
     scale_x_continuous(breaks=seq(0,12,1))+
-    scale_y_continuous(breaks=seq(0,20,2), limits = c(-5, 20))+
-    theme(axis.title = element_text(size=20, face="bold"), legend.position = "bottom", legend.justification = "center", legend.text = element_text(size=18), legend.title = element_text(size=18), axis.text = element_text(size=16), axis.line.y = element_blank())+
+    scale_y_continuous(breaks=seq(-10,20,2), limits = c(-10, 20))+
+    theme(axis.title = element_text(size=16, face="bold"), legend.position = "bottom", legend.justification = "center", legend.text = element_text(size=18), legend.title = element_blank(), axis.text = element_text(size=16), axis.line.y = element_blank())+
     #Colors
     scale_color_manual(values=brewer.pal(3, "Set1"), name="Treatment:", labels=c("SCI+NPC", "SCI+Saline"))+
     #Annotations
     annotate(geom="text", label=target, x=6.5, y=7.5, size=14, fontface=2, alpha=0.8)+
-    annotate(geom="text",label=paste("p:", toString(format(p_value_data[, p_value][1], digits=2, nsmall = 2)), sep = ""), x=2, y=-4, fontface=4, size=5)+
-    annotate(geom="text",label=paste("p:", toString(format(p_value_data[, p_value][2], digits=2, nsmall = 2)), sep = ""), x=5, y=-4, fontface=4, size=5)+
-    annotate(geom="text",label=paste("p:", toString(format(p_value_data[, p_value][3], digits=2, nsmall = 2)), sep = ""), x=12, y=-4, fontface=4, size=5)
+    annotate(geom="text",label=paste("", toString(format(p_value_data[, p_value][1], digits=2, nsmall = 2)), sep = ""), x=2, y=18, fontface=2, size=5)+
+    annotate(geom="text",label=paste("", toString(format(p_value_data[, p_value][2], digits=2, nsmall = 2)), sep = ""), x=5, y=18, fontface=2, size=5)+
+    annotate(geom="text",label=paste("", toString(format(p_value_data[, p_value][3], digits=2, nsmall = 2)), sep = ""), x=12, y=18, fontface=2, size=5)+
+    
+    annotate(geom="text", label="UP-REGULATION", x=6.5, y=16, fontface=2, alpha=0.3, size=6)+
+    annotate(geom="text", label="DOWN-REGULATION", x=6.5, y=-7, fontface=2, alpha=0.3, size=6)
   
   return(out_plot)  
 }
+
+individual_target_plot("IL-1a")
+
 ```
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
 ################################################################### OUTPUT ##############################################################
 ```
-##Statistical analysis: between groups for each time point
+## Data modifications
 
-###Evaluation of assumptions
-Assumption of normality is evaluated using Shapiro Wilk's test for each treatment (group) within each time point and for each target separately. Null hypothesis is that data is normally distributed. 
+* *Normalisation:* Each expression value (i.e. for each day, animal and target) is divided (i.e. normalised) by the mean of the expression for the same target in healthy (none injured, none transplanted) animals.  
 
-Assumption of homogenity of variances is between the two treatments (groups) within each time point and for each target. Given that both groups followed a normal distribution the homogenity of variances was evaluated using Bartlett's test. Given that at least one of the groups did not follow a normal distribution the homogenity of variances was evaluated using Fligner Killeen's test.  
+* *Outliers:* All observations wiht normalised expression value > 20 are removed. This cut-off is based in plotting of histogram. IL-7 is completely removed due to heavy influence of outliers. 
 
-###Independent two group comparison
-Given that data in both treatments (groups) was normally distributed and the variances were equal the groups were compared using two-sided non-paired Student's t-test. Given that data in both treatments (groups) was normally distributed but the groups and unequal variances the variance was estimated separately for eah group and the Welch modification to the degrees of freedom was used. 
+## Statistical analysis
 
-Given that data in at least one of the groups was not normally distributed a two-sided non-paired Wilcoxon Rank Sum test with continuity correction in the normal approximation for the p-value was calculated. 
+###Evaluation of assumptions prior to statistical analysis
+* Assumption of normality is evaluated using Shapiro Wilk's test for each treatment (group) within each time point and for each target separately. Null hypothesis is that data is normally distributed. 
+
+* Assumption of homogenity of variances is between the two treatments (groups) within each time point and for each target. Given that both groups followed a normal distribution the homogenity of variances was evaluated using Bartlett's test. Given that at least one of the groups did not follow a normal distribution the homogenity of variances was evaluated using Fligner Killeen's test.  
+
+###Independent intraday two group comparison
+* Given that data in both treatments (groups) was normally distributed and the variances were equal the groups were compared using two-sided non-paired Student's t-test. Given that data in both treatments (groups) was normally distributed but the groups and unequal variances the variance was estimated separately for eah group and the Welch modification to the degrees of freedom was used. 
+
+* Given that data in at least one of the groups was not normally distributed a two-sided non-paired Wilcoxon Rank Sum test with continuity correction in the normal approximation for the p-value was calculated. 
+
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE, fig.width=20, fig.height=10}
+#INDIVIDUAL CYTOKINES
+plot_grid(individual_target_plot("IL-1a"), individual_target_plot("IL-1b"), individual_target_plot("IL-2"), individual_target_plot("IL-4"))
+plot_grid(individual_target_plot("IL-6"), individual_target_plot("IL-10"), individual_target_plot("IL-12(p70)"), individual_target_plot("TNF-a"))
+plot_grid(individual_target_plot("IL-13"), individual_target_plot("IL-17"), individual_target_plot("IL-18"), individual_target_plot("G-CSF"))
+plot_grid(individual_target_plot("GM-CSF"), individual_target_plot("GRO/KC"), individual_target_plot("IFN-g"), individual_target_plot("M-CSF"))
+plot_grid(individual_target_plot("MCP-1"), individual_target_plot("MIP-1a"), individual_target_plot("MIP-3a"), individual_target_plot("RANTES"))
+plot_grid(individual_target_plot("VEGF"))
+
+```
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+#P-VALUES FOR INTRADAY COMPARISONS
 p_table <- group_comparison_p
 p_table[, "p_value"] <- p_table[, format(p_value, digits = 2)]
 p_table[, "test"] = NULL
@@ -171,11 +220,7 @@ p_table <- dcast.data.table(p_table, ...~evaluation_week, value.var = "p_value")
 kable(p_table, align="c", col.names = c("Target", "P-value(2w)", "P-value(5w)", "P-value(12w)"))
 ```
 
-```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE, fig.width=20, fig.height=10}
-plot_grid(individual_target_plot("IL-1a"), individual_target_plot("IL-1b"), individual_target_plot("IL-2"), individual_target_plot("IL-4"))
-plot_grid(individual_target_plot("IL-6"), individual_target_plot("IL-7"), individual_target_plot("IL-10"), individual_target_plot("IL-12(p70)"))
-plot_grid(individual_target_plot("IL-13"), individual_target_plot("IL-17"), individual_target_plot("IL-18"), individual_target_plot("G-CSF"))
-plot_grid(individual_target_plot("GM-CSF"), individual_target_plot("GRO/KC"), individual_target_plot("IFN-g"), individual_target_plot("M-CSF"))
-plot_grid(individual_target_plot("MCP-1"), individual_target_plot("MIP-1a"), individual_target_plot("MIP-3a"), individual_target_plot("RANTES"))
-plot_grid(individual_target_plot("TNFa"), individual_target_plot("VEGF"))
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+#SUMMARY TABLE 
+
 ```
