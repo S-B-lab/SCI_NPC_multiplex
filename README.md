@@ -8,12 +8,12 @@
 
 **Methods** Content of cytokines and chemokines was measured in CSF samples using immunoassay (Bio-Rad). 
 
-**Report file**
+**Report**
 > SCI_NPC_multiplex_analysis.html
 
-**Script file**
+**Script**  
 Script takes a raw Bio-Rad multiplex file with time and group column added as input.  
-> SCI_NPC_multiplex_analysis.R
+> SCI_NPC_multiplex_analysis.Rmd
 
 
 _Lab: Svensson Brundin_  
