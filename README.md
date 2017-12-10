@@ -16,6 +16,6 @@ Script takes a raw Bio-Rad multiplex file with time and group column added as in
 > SCI_NPC_multiplex_analysis.R
 
 
-_Lab: Svensson Brundin_
+_Lab: Svensson Brundin_  
 _PhD students: Sreenivasa Sankavaram, Ramil Hakim_
 
