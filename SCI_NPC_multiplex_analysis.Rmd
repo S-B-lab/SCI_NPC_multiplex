@@ -48,13 +48,23 @@ names(DT) <-  c("SCI", "treatment", "evaluation", "evaluation_weeks", col_name_s
 DT <-  DT[!is.na(evaluation_weeks)]
 DT[, "evaluation"] = NULL
 
-#4. LONG FORMAT
+#4. FROM WIDE TO LONG FORMAT
 DT_melt <- melt.data.table(DT, id.vars=c("SCI", "treatment", "evaluation_weeks"))
 
-#5. NORMALIZE TO HEALTHY FOR EACH TARGET SEPARATELY
+#5. NORMALIZE EXPRESSION TO HEALTHY FOR EACH TARGET SEPARATELY
 expression_normalizer <-  function(list_object){
   divisor <-  list_object[treatment=="none", mean(value)]
-  list_object[, norm_value:=value/divisor]
+  list_object[,value:=ifelse(value==0,1,value)]
+  #Function normalizes the expression data to the mean of healthy animals. norm_value = over/under expression in %
+  normalizer <- function(one_value){
+      if(one_value>0 & divisor>0){return(one_value/divisor)}
+      if(one_value>0 & divisor<0){return((one_value-divisor)/(-1*divisor))}
+      if(one_value<0 & divisor>0){return(1/((divisor-one_value)/divisor))}
+      if(one_value<0 & divisor<0){return(1/(one_value/divisor))}
+  }
+  
+  norm_value_col <- data.table(do.call(rbind, lapply(list_object[, value], function(val){normalizer(val)})))
+  list_object[, "norm_value"] <- log2(norm_value_col)
   return(list_object)
 }
 
@@ -64,6 +74,7 @@ DT_melt <- do.call(rbind, lapply(split(DT_melt, DT_melt[,variable]), function(ob
 DT_melt[, "SCI"] = NULL
 DT_melt <- DT_melt[treatment!="none"]
 DT_melt[, "treatment"] <- factor(DT_melt[, treatment])
+
 ```
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
@@ -71,12 +82,7 @@ DT_melt[, "treatment"] <- factor(DT_melt[, treatment])
 ```
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
-#1. REMOVING OUTLIERS
-#Range based on histogram of norm_values. IL-7 removed due to multiple outliers. 
-DT_melt <- DT_melt[norm_value<20 & norm_value>-10 & variable!="IL-7"]
-DT_melt[,"variable"] <- factor(DT_melt[,variable])
-
-#2. Summarizing data per treatment, time point and target
+#1. Summarizing data per treatment, time point and target
 DT_summary <- DT_melt[, .(norm_value = mean(norm_value), norm_value_sd = sd(norm_value), n=.N), by=c("treatment", "evaluation_weeks", "variable")]
 DT_summary <- DT_summary[,`:=`(SEMx1.96=qnorm(0.975)*norm_value_sd/sqrt(n))][, `:=`(CI.lower = norm_value-SEMx1.96, CI.upper=norm_value+SEMx1.96)]
 
@@ -209,25 +215,26 @@ individual_target_plot <- function(target){
     geom_point(shape = 15, size=8, position = position_dodge(width=1), show.legend = FALSE)+
     #Labels
     xlab("Weeks (Post SCI)")+
-    ylab("Normalised expression")+
+    ylab("log2(fold change)")+
     scale_x_continuous(breaks=seq(0,12,1))+
-    scale_y_continuous(breaks=seq(-16,20,4), limits = c(-15, 20))+
+    scale_y_continuous(breaks=seq(-7,8,2), limits = c(-7, 12))+
     theme(axis.title = element_text(size=20, face="bold"), legend.position = "bottom", legend.justification = "center", legend.text = element_text(size=18), legend.title = element_blank(), axis.text = element_text(size=16), axis.line.y = element_blank())+
     #Colors
     scale_color_manual(values=brewer.pal(3, "Set1"), name="Treatment:", labels=c("SCI+NPC", "SCI+Saline"))+
     #Annotations
     annotate(geom="text", label=target, x=6.5, y=7.5, size=12, fontface=2, alpha=0.8)+
     
-    annotate(geom="text",label=paste("", toString(format(p_value_data[, p_value][1], digits=2, nsmall = 2)), sep = ""), x=2, y=19, fontface=2, size=6, color=color_function(2, 1))+
-    annotate(geom="text",label=paste("", toString(format(p_value_data[, p_value][2], digits=2, nsmall = 2)), sep = ""), x=5, y=19, fontface=2, size=6, color=color_function(5, 2))+
-    annotate(geom="text",label=paste("", toString(format(p_value_data[, p_value][3], digits=2, nsmall = 2)), sep = ""), x=12, y=19, fontface=2, size=6, color=color_function(12, 3))+
+    annotate(geom="text",label=paste("", toString(format(p_value_data[, p_value][1], digits=2, nsmall = 2)), sep = ""), x=2, y=10, fontface=2, size=6, color=color_function(2, 1))+
+    annotate(geom="text",label=paste("", toString(format(p_value_data[, p_value][2], digits=2, nsmall = 2)), sep = ""), x=5, y=10, fontface=2, size=6, color=color_function(5, 2))+
+    annotate(geom="text",label=paste("", toString(format(p_value_data[, p_value][3], digits=2, nsmall = 2)), sep = ""), x=12, y=10, fontface=2, size=6, color=color_function(12, 3))+
     
-    annotate(geom="text", label="Difference over time:", x=6.5, y=-9, fontface=2, size=4)+
-    annotate(geom="text", label=paste("NPC: ", format(overtime_comparison_p[variable==target & treatment=="NPC", p_value], digits=2, scientific = TRUE),sep=""), x=5.5, y=-11, fontface=2, size=4, color=color_function_overtime("NPC", target))+
-    annotate(geom="text", label=paste("Saline: ", format(overtime_comparison_p[variable==target & treatment=="saline", p_value], digits=2, scientific = TRUE),sep=""), x=7.5, y=-11, fontface=2, size=4, color=color_function_overtime("saline", target))+
+    annotate(geom="text", label="NPC: ", x=5.5, y=-5.5, fontface=2, size=4)+
+    annotate(geom="text", label=format(overtime_comparison_p[variable==target & treatment=="NPC", p_value], digits=2, scientific = TRUE), x=6.1, y=-5.5, fontface=2, size=4, color=color_function_overtime("NPC", target))+
+    annotate(geom="text", label="Saline: ", x=6.8, y=-5.5, fontface=2, size=4)+
+    annotate(geom="text", label=format(overtime_comparison_p[variable==target & treatment=="saline", p_value], digits=2, scientific = TRUE), x=7.5, y=-5.5, fontface=2, size=4, color=color_function_overtime("saline", target))+
     
-    annotate(geom="text", label="UP-REGULATION", x=6.5, y=16, fontface=2, alpha=0.3, size=6)+
-    annotate(geom="text", label="DOWN-REGULATION", x=6.5, y=-14, fontface=2, alpha=0.3, size=6)
+    annotate(geom="text", label="UP-REGULATION", x=6.5, y=12, fontface=2, alpha=0.3, size=6)+
+    annotate(geom="text", label="DOWN-REGULATION", x=6.5, y=-7, fontface=2, alpha=0.3, size=6)
   
   return(out_plot)  
 }
@@ -286,20 +293,20 @@ inflammation_overtime_plot <- function(infl_type){
     geom_smooth(plot_data, mapping=aes(x=evaluation_weeks, y=norm_value, color=treatment, fill=treatment), se=TRUE, alpha=0.2, show.legend = FALSE)+
     #Legends and shapes    
     xlab("Weeks (Post SCI)")+
-    ylab("Normalised expression")+
+    ylab("log2(fold change)")+
     scale_x_continuous(breaks=seq(0,12,1))+
-    scale_y_continuous(breaks=seq(-16,20,4), limits = c(-15, 20))+
+    scale_y_continuous(breaks=seq(-3, 6, 1), limits = c(-4, 8))+
     theme(axis.title = element_text(size=20, face="bold"), legend.position = "bottom", legend.justification = "center", legend.text = element_text(size=18), legend.title = element_blank(), axis.text = element_text(size=16), axis.line.y = element_blank())+
     #Colors
     scale_color_manual(values=brewer.pal(3, "Set1"), name="Treatment:", labels=c("SCI+NPC", "SCI+Saline"))+
     scale_fill_manual(values=brewer.pal(3, "Set1"), name="Treatment:", labels=c("SCI+NPC", "SCI+Saline"))+
     #Annotations
-    annotate(geom="text", label="UP-REGULATION", x=6.5, y=16, fontface=2, alpha=0.3, size=6)+
-    annotate(geom="text", label="DOWN-REGULATION", x=6.5, y=-14, fontface=2, alpha=0.3, size=6)+
+    annotate(geom="text", label="UP-REGULATION", x=6.5, y=7, fontface=2, alpha=0.3, size=6)+
+    annotate(geom="text", label="DOWN-REGULATION", x=6.5, y=-4, fontface=2, alpha=0.3, size=6)+
     
-    annotate(geom="text", label=toString(format(inflammation_boot_p_values[evaluation_weeks==2, median(p_value)],digits=2, scientific = TRUE)), x=2, y=19, fontface=2, size=5, color="green")+
-    annotate(geom="text", label=toString(format(inflammation_boot_p_values[evaluation_weeks==5, median(p_value)],digits=2, scientific = TRUE)), x=5, y=19, fontface=2, size=5, color="green")+
-    annotate(geom="text", label=toString(format(inflammation_boot_p_values[evaluation_weeks==12, median(p_value)],digits=2, scientific = TRUE)), x=12, y=19, fontface=2, size=5, color="red")
+    annotate(geom="text", label=toString(format(inflammation_boot_p_values[evaluation_weeks==2, median(p_value)],digits=2, scientific = TRUE)), x=2, y=6, fontface=2, size=5, color="green")+
+    annotate(geom="text", label=toString(format(inflammation_boot_p_values[evaluation_weeks==5, median(p_value)],digits=2, scientific = TRUE)), x=5, y=6, fontface=2, size=5, color="green")+
+    annotate(geom="text", label=toString(format(inflammation_boot_p_values[evaluation_weeks==12, median(p_value)],digits=2, scientific = TRUE)), x=12, y=6, fontface=2, size=5, color="green")
 
   return(plot_out)
 }
@@ -369,6 +376,23 @@ inflammation_heatmap_function <- function(week){
 
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+#1. CREATING DT_MELT WITH UNIQUE ANIMAL INDEX TO BE ABLE TO CALCULATE INFLAMMATION SUMMARY PROPERLY 
+DT_mean <- DT[, !"SCI"]
+DT_mean[,"index"] = 1:nrow(DT)
+DT_mean <- melt.data.table(DT_mean, id.vars = c("index", "treatment", "evaluation_weeks"))
+DT_mean <- do.call(rbind, lapply(split(DT_mean, DT_mean[,variable]), function(object){expression_normalizer(object)}))
+
+DT_mean_summary <- DT_mean[, .(norm_value_mean=mean(norm_value)), by=c("index", "treatment", "evaluation_weeks")]
+
+View(DT_mean_summary)
+
+
+
+```
+
+
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
 ################################################################### OUTPUT ##############################################################
 ```
 ## Executive summary
@@ -382,9 +406,7 @@ inflammation_heatmap_function <- function(week){
 
 ## Data modifications
 
-* **Normalisation:** Expression value for each day, animal and target was divided by the mean of the expression for the same target in healthy (none injured, none transplanted) animals.  
-
-* **Outliers:** All observations with normalised expression > 20 were removed. This cut-off was based on appearance of histogram. IL-7 was completely removed due to heavy influence of outliers. 
+* **Log2 fold change:** Fold change of expression was calculated for each day, animal and target by dividing the expression by the mean of the expression for the same target in healthy (none injured, none transplanted) animals. Log2 was taken of the fold change. Expression values equal to zero were set to 1 prior to fold change calculation in order to allow for log2() of fold change downstream.    
 
 ***
 
@@ -423,7 +445,7 @@ inflammation_overtime_plot("pro")
 
 ```
 
-**Figure 1:** Figure expression of pro-inflammatory cytokines/chemokines (IL-1a, IL-1b, IL-5, IL-6, IL-12(p70), IL-17, IL-18, GM-CSF, GRO/KC, IFN-g, MCP-1, MIP-1a, MIP-3a, RANTES, TNF-a) over time for each treatment group. Raw expression was normalised to average expression in healthy control for each target, animal and time point separately. Normalised values > 20 and < -10 were considered outliers and removed. P-values for independent two group comparison is presented at each time point. P-values are median p-values of 1000 two-group comparisons of 1000 bootstrapped data samples for each treatment. Assumptions and test selection as described above.    
+**Figure 1:** Figure log2(fold change in expression in relation to mean expresion in healthy control) of pro-inflammatory cytokines/chemokines (IL-1a, IL-1b, IL-5, IL-6, IL-12(p70), IL-17, IL-18, GM-CSF, GRO/KC, IFN-g, MCP-1, MIP-1a, MIP-3a, RANTES, TNF-a) over time for each treatment group. P-values for independent two group comparison is presented at each time point. P-values are median p-values of 1000 two-group comparisons of 1000 bootstrapped data samples for each treatment. Assumptions and test selection as described above.    
 
 ## Sensitivity analysis of comparison between treatments on pro-inflammation over time
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE, fig.width=14, fig.height=7}
@@ -462,7 +484,7 @@ inflammation_heatmap_function(c(12))
 inflammation_heatmap_function(c(2,5,12))
 ```
 
-**Figur 3:** Figure reports agglomerative hierarchical clustering with heatmap of pro-inflammatory cytokines/chemokines for each treatment and time point. Values are average normalised expression (raw expression divided by the average expression in healthy for each target, animal and week separately).  
+**Figur 3:** Figure reports agglomerative hierarchical clustering with heatmap of pro-inflammatory cytokines/chemokines for each treatment and time point. Values are log2(fold change in expression in relation to mean expresion in healthy control).   
 
 ***
 ## Individual cytokines over time
@@ -474,11 +496,11 @@ plot_grid(individual_target_plot("IL-6"), individual_target_plot("IL-10"), indiv
 plot_grid(individual_target_plot("IL-13"), individual_target_plot("IL-17"), individual_target_plot("IL-18"), individual_target_plot("G-CSF"))
 plot_grid(individual_target_plot("GM-CSF"), individual_target_plot("GRO/KC"), individual_target_plot("IFN-g"), individual_target_plot("M-CSF"))
 plot_grid(individual_target_plot("MCP-1"), individual_target_plot("MIP-1a"), individual_target_plot("MIP-3a"), individual_target_plot("RANTES"))
-plot_grid(individual_target_plot("VEGF"), ncol=2, nrow=2)
+plot_grid(individual_target_plot("VEGF"), individual_target_plot("IL-1a"), ncol=2, nrow=2)
 
 ```
 
-**Figure 4:** Each plot reports expression of one cytokine per treatment group and time point. Statistical analysis as described above. P-values for comparison of the two independent groups are presented at each time point. Color of p-value is gree if p-value < 0.05, orange if p-value>0.05 & p-value <0.1 and red if p-value >0.1. P-values for within treatment multiple comparison (over time) are presented in the lower part of the plot. 
+**Figure 4:** Each plot reports log2(fold change in expression in relation to mean expresion in healthy control) of one cytokine. Statistical analysis as described above. P-values for comparison of the two independent groups are presented at each time point. Color of p-value is green if p-value < 0.05, orange if p-value>0.05 & p-value <0.1 and red if p-value >0.1. P-values for within treatment multiple comparison (over time) are presented in the lower part of the plot. 
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
 #P-VALUES FOR INTRADAY COMPARISONS
