@@ -48,7 +48,7 @@ col_name_subset <- unlist(lapply(col_name_subset, function(col_name){column_name
 names(DT) <-  c("SCI", "treatment", "evaluation", "evaluation_weeks", col_name_subset)
 
 #3. REMOVING UNNECESSARY DATA
-DT <-  DT[!is.na(evaluation_weeks)]
+DT[evaluation=="before", "evaluation_weeks"] <- 1
 DT[, "evaluation"] = NULL
 
 #4. FROM WIDE TO LONG FORMAT
@@ -75,9 +75,12 @@ DT_melt <- do.call(rbind, lapply(split(DT_melt, DT_melt[,variable]), function(ob
 
 #6. REMOVING UNNECESSARY DATA & ADJUSTING VARIABLE TYPES
 DT_melt[, "SCI"] = NULL
-DT_melt <- DT_melt[treatment!="none"]
-DT_melt[, "treatment"] <- factor(DT_melt[, treatment])
 
+DT_melt_full <-  DT_melt[treatment!="none"] #for ploting purposes, DT_melt only for statistical analysis
+DT_melt <- DT_melt[!(treatment%in%c("none", "SCI"))] 
+
+DT_melt_full[, "treatment"] <- factor(DT_melt_full[, treatment])
+DT_melt[, "treatment"] <- factor(DT_melt[, treatment])
 
 ```
 
@@ -153,27 +156,30 @@ group_comparison_p <- do.call(rbind, lapply(split(DT_melt, DT_melt[, .(variable,
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
 #1. SUMMARIZING DATA PER TREATMENT, TIME POINT AND TARGET
-DT_summary <- DT_melt[, .(norm_value = mean(norm_value), norm_value_sd = sd(norm_value), n=.N), by=c("treatment", "evaluation_weeks", "variable")]
+DT_summary <- DT_melt_full[, .(norm_value = mean(norm_value), norm_value_sd = sd(norm_value), n=.N), by=c("treatment", "evaluation_weeks", "variable")]
 DT_summary <- DT_summary[,`:=`(SEMx1.96=qnorm(0.975)*norm_value_sd/sqrt(n))][, `:=`(CI.lower = norm_value-SEMx1.96, CI.upper=norm_value+SEMx1.96)]
 
 #2. PLOT FUNCTION FOR PLOTTING INDIVIDUAL TARGETS
 individual_target_plot <- function(target){
-  plot_data <- DT_melt[variable==target]
-  plot_data_summary <-  DT_summary[variable==target]
+  plot_data <- DT_melt_full[variable==target & treatment!="SCI"]
+  plot_data_summary <-  DT_summary[variable==target & treatment!="SCI"]
   p_value_data <-  group_comparison_p[variable==target]
   
   color_function <- function(week, pos_n){
-    p_val <- p_value_data[, p_value][pos_n] 
+    p_val <- p_value_data[, p_value][pos_n]
     if(p_val<0.05){out_var="green"} else if (p_val<0.1 & p_val>=0.05){out_var="orange"} else {out_var="red"}
     return(out_var)
     }
-  
+
   out_plot <- ggplot(plot_data_summary, aes(x=evaluation_weeks, y=norm_value, color=treatment))+
     #Main
     geom_segment(aes(x=1, xend=12, y=0, yend=0), color="black", size=1, linetype=2)+
     geom_errorbar(aes(ymin=CI.lower, ymax=CI.upper), size=3, width=1, position = position_dodge(width = 1), alpha=0.7, show.legend = FALSE)+
     geom_jitter(plot_data, mapping=aes(x=evaluation_weeks, y=norm_value, color=treatment), size=3, position = position_jitterdodge(jitter.width = 1, dodge.width = 1), shape=18)+
     geom_point(shape = 15, size=5, position = position_dodge(width=1), show.legend = FALSE)+
+    #Adding before tx
+    geom_jitter(DT_melt_full[variable==target & treatment=="SCI"], mapping=aes(x=evaluation_weeks, y=norm_value), color="black", size=3, width = 0.25, shape=18)+
+    geom_errorbar(DT_summary[variable==target & treatment=="SCI"], mapping=aes(ymin=CI.lower, ymax=CI.upper), size=3, width=0.5, alpha=0.7, show.legend = FALSE, color="black")+
     #Labels
     xlab("Weeks (Post SCI)")+
     ylab("log2(fold change)")+
@@ -187,11 +193,11 @@ individual_target_plot <- function(target){
     annotate(geom="text", label=paste("", toString(format(p_value_data[, p_value][1], digits=2, nsmall = 2)), sep = ""), x=2, y=7, fontface=2, size=8, color=color_function(2, 1))+
     annotate(geom="text", label=paste("", toString(format(p_value_data[, p_value][2], digits=2, nsmall = 2)), sep = ""), x=5, y=7, fontface=2, size=8, color=color_function(5, 2))+
     annotate(geom="text", label=paste("", toString(format(p_value_data[, p_value][3], digits=2, nsmall = 2)), sep = ""), x=12, y=7, fontface=2, size=8, color=color_function(12, 3))+
-    
+
     annotate(geom="text", label="UP-REGULATION", x=6.5, y=9, fontface=2, alpha=0.3, size=6)+
     annotate(geom="text", label="DOWN-REGULATION", x=6.5, y=-7, fontface=2, alpha=0.3, size=6)
   
-  return(out_plot)  
+  return(out_plot)
 }
 
 ```
@@ -262,24 +268,26 @@ overtime_comparison_function <-  function(list_object, return_var){
   
   homo_p_value <- fligner.test(list_object$norm_value, list_object$evaluation_weeks)$p.value 
   
-  if(all(norm_p_values)>0.05){
+  if(all(norm_p_values>0.05)){
       if(homo_p_value>0.05){
-      aov_raw <-  aov(norm_value ~ evaluation_weeks, data = list_object)
+      aov_raw <-  aov(norm_value ~ factor(evaluation_weeks), data = list_object)
       p_value <- summary(aov_raw)[[1]]$`Pr(>F)`[1]
     } else { 
-      aov_welch_raw <- oneway.test(norm_value ~ evaluation_weeks, var.equal = FALSE, data = list_object)
-      p_value <- as.numeric(aov_welch_raw[3])
+      aov_raw <- oneway.test(norm_value ~ factor(evaluation_weeks), var.equal = FALSE, data = list_object)
+      p_value <- as.numeric(aov_raw[3])
     }
     } else {
-      aov_raw <-  aov(norm_value ~ evaluation_weeks, data = list_object)
+      aov_raw <-  aov(norm_value ~ factor(evaluation_weeks), data = list_object)
       p_value <- summary(aov_raw)[[1]]$`Pr(>F)`[1]
     }
   
-  if(return_var=="multiple_group_p"){return(data.table(treatment=list_object[, treatment][1], variable = list_object[, variable][1], p_value = p_value))}
+  if(return_var=="multiple_group_p"){return(data.table(treatment=list_object[, treatment][1], p_value = p_value))}
+  if(return_var=="aov_object"){return(aov_raw)}
 
 }
 
 overtime_comparison_p <- do.call(rbind, lapply(split(DT_melt, DT_melt[,.(variable, treatment)]), function(subset){overtime_comparison_function(subset, "multiple_group_p")}) )
+
 ```
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
@@ -307,48 +315,77 @@ inflammation_intraday_p_value <- function(list_object){
   return(data.table(evaluation_weeks = calc_data[, evaluation_weeks][1], p_value = p_value))
 }
 
-inflammation_p_values <- do.call(rbind, lapply(split(DT_mean_animals, DT_mean_animals[,.(evaluation_weeks)]), function(subset){inflammation_intraday_p_value(subset)}))
+inflammation_p_values <- do.call(rbind, lapply(split(DT_mean_animals[treatment!="SCI"], DT_mean_animals[treatment!="SCI",.(evaluation_weeks)]), function(subset){inflammation_intraday_p_value(subset)}))
+
+```
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+#1. Pro-inflammation over time within treatment
+overtime_inflammation_p_values <- do.call(rbind, lapply(split(DT_mean_animals[treatment!="SCI"], DT_mean_animals[treatment!="SCI", treatment]), function(subset){overtime_comparison_function(subset, "multiple_group_p")}))
+#2. Post hoc evaluation of over time comparison
+overtime_inflammation_post_hoc_p_values <- data.table(Treatment=c("NPC", "Saline"),do.call(rbind, lapply(split(DT_mean_animals[treatment!="SCI"], DT_mean_animals[treatment!="SCI", treatment]), function(subset){TukeyHSD(overtime_comparison_function(subset, "aov_object"))[[1]][,4]})))
 
 ```
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
 #1. MERGING RAW DATA SET WITH INFLAMMATION TYPE
-DT_melt_inflammation <- merge(DT_melt, variable_type, by = "variable")
+DT_melt_inflammation <- merge(DT_melt_full, variable_type, by = "variable")
 setkey(DT_melt_inflammation, inflammation_type)
 
 #2. INFLAMMATION OVER TIME PLOT FUNCTION
 inflammation_overtime_plot <- function(infl_type){
   plot_data <- DT_melt_inflammation[.(infl_type)]
-  plot_data_summary <- DT_mean_summary[treatment!="none"]
-  plot_data_animals <- DT_mean[,.(norm_value=mean(norm_value)), by=c("index", "treatment", "evaluation_weeks")][treatment!="none"]
-  
-  plot_out <- ggplot(plot_data_summary, aes(x=evaluation_weeks, y=norm_value, color=treatment))+
-    geom_segment(aes(x=1, xend=12, y=0, yend=0), color="black", size=1, linetype=2)+
-    #Targets
-    geom_jitter(plot_data, mapping=aes(x=evaluation_weeks, y=norm_value, color=treatment), size=1, position = position_jitterdodge(jitter.width = 2, dodge.width = 2), alpha=0.5)+
-    #Animals
-    geom_jitter(plot_data_animals, mapping=aes(x=evaluation_weeks, y=norm_value, color=treatment), shape=18, size=3, position = position_jitterdodge(jitter.width = 1, dodge.width = 2), alpha=0.9)+
+  plot_data_summary <- DT_mean_summary[!(treatment%in%c("none"))]
+  plot_data_animals <- DT_mean[,.(norm_value=mean(norm_value)), by=c("index", "treatment", "evaluation_weeks")][!(treatment%in%c("none"))]
+    
+  plot_out <- ggplot(plot_data_summary[treatment!="SCI"], aes(x=evaluation_weeks, y=norm_value, color=treatment))+
+    geom_segment(aes(x=0.5, xend=12, y=0, yend=0), color="black", size=1, linetype=2)+
+    annotate(geom="text", x=0, y=0, label="Healthy", fontface=2, size=4)+
     #Group summary
-    geom_point(shape=15, size=4, position = position_dodge(width=2))+
-    geom_errorbar(aes(ymin=CI.lower, ymax=CI.upper), position = position_dodge(width=2), size=3, width=1, show.legend = FALSE, alpha=0.6)+
-    geom_smooth(plot_data_animals, mapping=aes(x=evaluation_weeks, y=norm_value, color=treatment, fill=treatment), se=TRUE, alpha=0.2, show.legend = FALSE)+
+    geom_point(shape=15, size=4, position = position_dodge(width=1))+
+    geom_errorbar(aes(ymin=CI.lower, ymax=CI.upper), position = position_dodge(width=1), size=3, width=1, show.legend = FALSE, alpha=0.6)+
+    geom_smooth(plot_data_animals[treatment!="SCI"], mapping=aes(x=evaluation_weeks, y=norm_value, color=treatment, fill=treatment), se=TRUE, alpha=0.2, show.legend = FALSE)+
+    #Targets
+    geom_jitter(plot_data[treatment!="SCI"], mapping=aes(x=evaluation_weeks, y=norm_value, color=treatment), size=1, position = position_jitterdodge(jitter.width = 1, dodge.width = 1), alpha=0.5)+
+    #Animals
+    geom_jitter(plot_data_animals[treatment!="SCI"], mapping=aes(x=evaluation_weeks, y=norm_value, color=treatment), shape=18, size=3, position = position_jitterdodge(jitter.width = 0.5, dodge.width = 1), alpha=0.9)+
+    #Adding before tx.
+    geom_errorbar(plot_data_summary[treatment=="SCI"], mapping=aes(ymin=CI.lower, ymax=CI.upper), color="black", width=0.5, size=3, show.legend = FALSE, alpha=0.6)+
+    geom_point(plot_data_summary[treatment=="SCI"], mapping=aes(x=evaluation_weeks, y=norm_value), color="black", shape=15, size=4)+
+    geom_jitter(plot_data[.(infl_type)][treatment=="SCI"], mapping=aes(x=evaluation_weeks, y=norm_value), color="black", size=1, width=0.3, alpha=0.5)+
+    geom_jitter(plot_data_animals[treatment=="SCI"], mapping=aes(x=evaluation_weeks, y=norm_value), color="black", shape=18, size=3, width=0.3, alpha=0.9)+
     #Legends and shapes    
     xlab("Weeks (Post SCI)")+
     ylab("log2(fold change)")+
-    scale_x_continuous(breaks=seq(0,12,1))+
-    scale_y_continuous(breaks=seq(-3, 6, 1), limits = c(-4, 8))+
+    scale_x_continuous(breaks=seq(0,12,1)) +
+    scale_y_continuous(breaks=seq(-3, 7, 1), limits = c(-4, 8))+
     theme(axis.title = element_text(size=20, face="bold"), legend.position = "bottom", legend.justification = "center", legend.text = element_text(size=18), legend.title = element_blank(), axis.text = element_text(size=16), axis.line.y = element_blank())+
     #Colors
-    scale_color_manual(values=brewer.pal(3, "Set1"), name="Treatment:", labels=c("SCI+NPC (n=4 or 5/week)", "SCI+Saline (n=4 or 5/week)"))+
-    scale_fill_manual(values=brewer.pal(3, "Set1"), name="Treatment:", labels=c("SCI+NPC (n=4 or 5/week)", "SCI+Saline (n=4 or 5/week)"))+
+    scale_color_manual(values=c(brewer.pal(3, "Set1")[1:2], "black"), name="Treatment:", labels=c("SCI+NPC (n=4 or 5/week)", "SCI+Saline (n=4 or 5/week)"))+
+    scale_fill_manual(values=c(brewer.pal(3, "Set1")[1:2], "black"), name="Treatment:", labels=c("SCI+NPC (n=4 or 5/week)", "SCI+Saline (n=4 or 5/week)"))+
     #Annotations
-    annotate(geom="text", label="UP-REGULATION", x=6.5, y=7, fontface=2, alpha=0.3, size=6)+
+    annotate(geom="text", label="UP-REGULATION", x=6.5, y=7.5, fontface=2, alpha=0.3, size=6)+
     annotate(geom="text", label="DOWN-REGULATION", x=6.5, y=-4, fontface=2, alpha=0.3, size=6)+
-    
-    annotate(geom="text", label=toString(format(inflammation_p_values[evaluation_weeks==2, p_value], digits=2, scientific = TRUE)), x=2, y=6, fontface=2, size=5, color="green")+
-    annotate(geom="text", label=toString(format(inflammation_p_values[evaluation_weeks==5, p_value], digits=2, scientific = TRUE)), x=5, y=6, fontface=2, size=5, color="red")+
-    annotate(geom="text", label=toString(format(inflammation_p_values[evaluation_weeks==12, p_value], digits=2, scientific = TRUE)), x=12, y=6, fontface=2, size=5, color="red")
-
+    #P-values 
+    annotate(geom="text", label=paste("p:", toString(format(inflammation_p_values[evaluation_weeks==2, p_value], digits=2, scientific = TRUE)), sep=""), x=2, y=-3, fontface=2, size=6, color="green")+
+    annotate(geom="text", label=paste("p:", toString(format(inflammation_p_values[evaluation_weeks==5, p_value], digits=2, scientific = TRUE)), sep=""), x=5, y=-3, fontface=2, size=6, color="red")+
+    annotate(geom="text", label=paste("p:", toString(format(inflammation_p_values[evaluation_weeks==12, p_value], digits=2, scientific = TRUE)), sep=""), x=12, y=-3, fontface=2, size=6, color="red")+
+  #more annotations
+  annotate(geom="text", x=0, y=6.3, label="SCI", fontface=2, size=5)+
+  annotate(geom="text", x=1, y=6.7, label="NPC", fontface=2, size=4.5, color=brewer.pal(3, "Set1")[1])+
+  annotate(geom="text", x=1.3, y=6.7, label="/", fontface=2, size=4.5)+
+  annotate(geom="text", x=1, y=6, label="Saline", fontface=2, size=4.5, color=brewer.pal(3, "Set1")[2])+
+  annotate(geom="text", x=2, y=6.3, label="2w", fontface=2, size=5)+
+  annotate(geom="text", x=5, y=6.3, label="5w", fontface=2, size=5)+
+  annotate(geom="text", x=12, y=6.3, label="12w", fontface=2, size=5)+
+  #Arrows
+  geom_segment(aes(x=0, xend=0, y=5.4, yend=4.75), arrow = arrow(length=unit(0.25, "cm")), color="black")+
+  geom_segment(aes(x=1, xend=1, y=5.4, yend=4.75), arrow = arrow(length=unit(0.25, "cm")), color="black")+
+  geom_segment(aes(x=2.5, xend=4.5, y=6.3, yend=6.3), arrow = arrow(length=unit(0.1, "cm")), color="black", size=0.1)+
+  geom_segment(aes(x=5.5, xend=11.5, y=6.3, yend=6.3), arrow = arrow(length=unit(0.1, "cm")), color="black", size=0.1)+
+  #Segments
+  geom_segment(aes(x=1.25, xend=1.25, y=-2.5, yend=5), color="black", size=0.25, linetype=2)
+  
   return(plot_out)
 }
 
@@ -375,7 +412,7 @@ inflammation_heatmap_function <- function(week){
                            
                            cellnote=format(heatmap_data, digits=2), 
                            notecol="black",
-                           notecex=5,
+                           notecex=3,
                            
                            col=bluered(100),
                            labRow = col_names,
@@ -463,7 +500,7 @@ grid.arrange(arrangeGrob(arrangeGrob(mean_boot_plot_function(2, "none"), mean_bo
 **Figure 2.** Figure reports histograms (100 bins) of 1000 mean log2(fold change) for each treatment and time point. One repeat in the analysis was created by I) bootstrapping data for each animal and time point (pro-inflammatory targets only), II) calculation of mean log2(fold change) per rat and time point, III) calculating the mean log2(fold change) per treatment and time point. 
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
-kable(dcast.data.table(DT_mean_boot[, .(median=round(median(norm_value_mean),3)), by=c("treatment", "evaluation_weeks")], ...~evaluation_weeks, value.var="median"), align="c", col.names = c("Treatment", "2w", "5w", "12w"))
+kable(dcast.data.table(DT_mean_boot[treatment!="SCI", .(median=round(median(norm_value_mean),3)), by=c("treatment", "evaluation_weeks")], ...~evaluation_weeks, value.var="median"), align="c", col.names = c("Treatment", "2w", "5w", "12w"))
 
 ```
 
@@ -510,14 +547,39 @@ plot_grid(individual_target_plot("VEGF"), individual_target_plot("IL-7"), ncol=2
 **Figure 4:** Each plot reports log2(fold change in expression in relation to mean expresion in healthy control) of one cytokine. Statistical analysis as described above. P-values for comparison of the two independent groups are presented at each time point. Color of p-value is green if p-value < 0.05, orange if p-value>0.05 & p-value <0.1 and red if p-value >0.1. P-values for within treatment multiple comparison (over time) are presented in the lower part of the plot. 
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
-#P-VALUES FOR INTRADAY COMPARISONS
-p_table <- group_comparison_p
-p_table[, "p_value"] <- p_table[, format(p_value, digits = 2)]
-p_table[, "test"] = NULL
-p_table <- dcast.data.table(p_table, ...~evaluation_week, value.var = "p_value")
-
-#kable(p_table, align="c", col.names = c("Target", "P-value(2w)", "P-value(5w)", "P-value(12w)"))
+#P-VALUES FOR PRO-INFLAMMATION INTRADAY BETWEEN TREATMENTS
+kable(cbind(inflammation_p_values[, 1], round(inflammation_p_values[,2], 3)), col.names = c("Week", "P-value"), align="c")
 ```
+
+**Table 2.** P-values for mean level of pro-inflammation between treatments within week.
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+#P-VALUES FOR PRO-INFLAMMATION WITHIN TREATMENT BETWEEN WEEKS
+kable(cbind(overtime_inflammation_p_values[, 1], round(overtime_inflammation_p_values[,2],3)), align="c", col.names = c("Treatment", "P-value"))
+
+kable(cbind(overtime_inflammation_post_hoc_p_values[,1], round(overtime_inflammation_post_hoc_p_values[, 2:4],3)), align="c")
+```
+
+**Table 3.** P-values for mean level of pro-inflammation between weeks within treatment. 
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+#P-VALUES FOR DIFFERENCE IN EXPRESSION OF CYTOKINE/CHEMOKINE BETWEEN TREATMENTS WITHIN WEEK
+p_value_data <- dcast.data.table(group_comparison_p[, 1:3], variable~evaluation_week, value.var = "p_value")
+kable(cbind(p_value_data[,1], round(p_value_data[,2:4],3)), align="c", col.names = c("Target", "2w", "5w", "12w"))
+
+```
+
+**Table 4.** P-values for difference in expression of cytokine/chemokine between treatments within week.   
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+#P-VALUES FOR DIFFERENCE IN EXPRESSION OF CYTOKINE/CHEMOKINE WITHIN TREATMENT BETWEEN WEEK
+data_temp <-  data.table(variable=DT_melt[, unique(variable)], overtime_comparison_p)
+data_temp <- dcast.data.table(data_temp, variable~treatment, value.var = "p_value")
+
+kable(cbind(data_temp[, 1], round(data_temp[, 2:3],3)), align = "c", col.names = c("Target", "NPC", "Saline"))
+```
+
+**Table 5.** P-values for difference in cytokine/chemokine expression within treatment between week.
 
 \newpage
 
@@ -526,11 +588,11 @@ sessionInfo()
 ```
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
-#SAVING PLOTS
-#1. Inflammation over time
-#ggsave("NPC_multiplex_overtime.jpeg",inflammation_overtime_plot("pro"), dpi=1000, width=14, height=7)
+# #SAVING PLOTS
+# #1. Inflammation over time
+# ggsave("NPC_multiplex_overtime.jpeg",inflammation_overtime_plot("pro"), dpi=1000, width=14, height=7)
 
-#2. Heatmap at 2 weeks
+# #2. Heatmap at 2 weeks
 # jpeg('heatmap_2w.jpg',
 #      width=3000,
 #      height=1000,
@@ -548,8 +610,6 @@ sessionInfo()
 # ggsave("MCP_1.jpeg", individual_target_plot("MCP-1"), dpi=1000, width=14, height=7)
 # ggsave("MIP_1a.jpeg", individual_target_plot("MIP-1a"), dpi=1000, width=14, height=7)
 # ggsave("IL_7.jpeg", individual_target_plot("IL-7"), dpi=1000, width=14, height=7)
-
-View(DT_mean_summary)
 
 ```
 
